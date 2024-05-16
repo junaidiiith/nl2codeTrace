@@ -121,12 +121,9 @@ def get_graph_nodes(class_info_objects):
 def get_class_info_objects(
         base_dir: str,
         all_code_files_path: str = 'all_code_filenames.txt',
-        all_req_files_path: str = 'all_req_filenames.txt'
     ):
     all_code_files_path = os.path.join(base_dir, all_code_files_path)
     all_code_files = [f_name.strip() for f_name in open(all_code_files_path)]
-
-    all_req_files_path = os.path.join(base_dir, all_req_files_path)
 
     class_info_objects = list()
     for f_name in tqdm(all_code_files):
@@ -170,10 +167,9 @@ def add_method_calls(graph_nodes, cdg_file_path):
 def get_code_graph_nodes(
         base_dir: str,
         all_code_files_path: str = 'all_code_filenames.txt',
-        all_req_files_path: str = 'all_req_filenames.txt',
         callgraph_path: str = 'etour_method_callgraph.json'
     ):
-    class_info_objects = get_class_info_objects(base_dir, all_code_files_path, all_req_files_path)
+    class_info_objects = get_class_info_objects(base_dir, all_code_files_path)
     graph_nodes = get_graph_nodes(class_info_objects)
     cdg_path = os.path.join(base_dir, callgraph_path)
     add_method_calls(graph_nodes, cdg_path)

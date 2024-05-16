@@ -5,6 +5,7 @@ from tqdm.auto import tqdm
 from prompts.templates import (
     CLASS_TRACE_TEMPLATE
 )
+import evaluation
 
 from collections import defaultdict
 from typing import List

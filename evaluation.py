@@ -1,6 +1,8 @@
+from llama_index.core import Document
 from collections import defaultdict
 import json
-from querying import query_parallel
+from typing import List
+from querying import query_parallel, CLASS_TRACE_TEMPLATE
 
 
 def get_post_processing_results(req_results):
@@ -83,4 +85,23 @@ def get_results(
         print(f"Results for {config}")
 
         solutions = get_solutions(f'{base_dir}/etour_solution_links_english.txt')
+        compare_solutions(solutions, llm_results)
+
+
+def evaluate_query_engines(
+        req_nodes: List[Document], 
+        query_engines: dict,
+        solutions_file: str
+    ):
+    solutions = get_solutions(solutions_file)
+    for config, query_engine in query_engines.items():
+        print(f"Evaluating for {config}")
+        req_results = query_parallel(
+            query_engine, 
+            CLASS_TRACE_TEMPLATE, 
+            req_nodes, 
+            num_threads=8
+        )
+        llm_results = get_post_processing_results(req_results)
+        print(f"Results for {config}")
         compare_solutions(solutions, llm_results)
