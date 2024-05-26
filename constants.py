@@ -35,6 +35,7 @@ class EmbeddingModels(Enum):
     HF_BGE_LARGE = "bge_large"
     HF_BGE_BASE = "bge_base"
     HF_BGE_SMALL = "bge_small"
+    HF_BGE_M3 = "bge_m3"
     AS_THENLPER = "gte_large"
     DEFAULT_EMBED_MODEL = HF_BGE_SMALL
 
@@ -43,7 +44,8 @@ EmbeddingModelsMap = {
     EmbeddingModels.HF_BGE_LARGE.value: "BAAI/bge-large-en-v1.5",
     EmbeddingModels.HF_BGE_BASE.value: "BAAI/bge-base-en-v1.5",
     EmbeddingModels.HF_BGE_SMALL.value: "BAAI/bge-small-en-v1.5",
-    EmbeddingModels.AS_THENLPER.value: "thenlper/gte-large"
+    EmbeddingModels.HF_BGE_M3.value: "BAAI/bge-m3",
+    EmbeddingModels.AS_THENLPER.value: "thenlper/gte-large",
 }
 
 
@@ -54,3 +56,10 @@ class LLMTypes(Enum):
     COHERE = "cohere"
     OPENAI = "openai"
     DEFAULT_LLM = ANY_SCALE
+
+KG_INDEX_LABEL = 'kg_index'
+KG_INDEX_CUSTOM_LABEL = 'kg_index_custom'
+VECTOR_INDEX_LABEL = 'vector_index.pkl'
+KW_TABLE_LABEL = 'kw_table.pkl'
+CODE_KG_INDEX_LABEL = 'code_kg_index.pkl'
+SIMPLE_KW_TABLE_LABEL = 'simple_kw_table.pkl'

@@ -13,6 +13,7 @@ from llama_index.core.retrievers import (
     BaseRetriever,
     VectorIndexRetriever,
     KGTableRetriever,
+    KnowledgeGraphRAGRetriever
 )
 
 from llama_index.core.indices.keyword_table import KeywordTableGPTRetriever
@@ -25,7 +26,7 @@ class CustomRetriever(BaseRetriever):
     def __init__(
         self,
         vector_retriever: VectorIndexRetriever,
-        kg_retriever: Union[KGTableRetriever, KeywordTableGPTRetriever],
+        kg_retriever: Union[KGTableRetriever, KeywordTableGPTRetriever, KnowledgeGraphRAGRetriever],
         mode: str = "OR",
     ) -> None:
         """Init params."""
@@ -60,7 +61,7 @@ class CustomRetriever(BaseRetriever):
 
 def custom_query_engine(
         vector_retriever: VectorIndexRetriever,
-        kg_retriever: Union[KGTableRetriever, KeywordTableGPTRetriever],
+        kg_retriever: Union[KGTableRetriever, KeywordTableGPTRetriever, KnowledgeGraphRAGRetriever],
         mode: str = "OR"
 ):
     retriever = CustomRetriever(

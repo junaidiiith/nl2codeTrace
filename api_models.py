@@ -3,6 +3,7 @@ from typing import Union
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.anyscale import Anyscale
 from llama_index.llms.cohere import Cohere
+from llama_index.llms.openai import OpenAI
 from llama_index.core import Settings
 
 from constants import (
@@ -48,6 +49,11 @@ def get_llm(
         llm = Cohere(
             model=model_name,
             api_key=api_key,
+        )
+    elif model_type == LLMTypes.OPENAI.value:
+        llm = OpenAI(
+            model=model_name,
+            api_key=api_key
         )
 
     return llm

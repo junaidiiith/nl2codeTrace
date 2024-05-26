@@ -16,7 +16,9 @@ class RequirementsNodesCreator:
                 text=content,
                 metadata={
                     "file_name": file_name
-                }
+                },
+                excluded_embed_metadata_keys=["file_name", "questions_this_excerpt_can_answer"],
+                excluded_llm_metadata_keys=["file_name", "questions_this_excerpt_can_answer"]
             )
             docs += [doc]
         
