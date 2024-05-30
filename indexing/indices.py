@@ -16,6 +16,10 @@ from code2graph import (
 )
 from indexing.utils import get_transformations, PIPELINE_CHUNK_SIZE
 
+from llama_index.core.indices.keyword_table.utils import (
+    extract_keywords_given_response,
+)
+
 from constants import (
     KG_INDEX_LABEL,
     VECTOR_INDEX_LABEL,
@@ -29,6 +33,12 @@ neo4j_username = "neo4j"
 neo4j_password = "12345678"
 neo4j_url = "bolt://localhost:7687"
 neo4j_database = "neo4j"
+
+
+def get_url(host_ip):
+    if host_ip != 'localhost':
+        return neo4j_url.replace('locahost', host_ip)
+    return host_ip
 
 
 logger = logging.getLogger(__name__)
@@ -62,7 +72,7 @@ def create_vector_index(
     )
 
     os.makedirs(save_path, exist_ok=True)
-    with open(f'{save_path}/{VECTOR_INDEX_LABEL}', 'wb') as f:
+    with open(f'{save_path}/{VECTOR_INDEX_LABEL}.pkl', 'wb') as f:
         pickle.dump(vector_index, f)
 
     return indexed_nodes, vector_index
@@ -77,7 +87,7 @@ def create_keyword_table_index(
         show_progress=True,
         save_path:str ='tmp',
         **kwargs
-    ) -> KeywordTableIndex:
+    ) -> VectorStoreIndex:
 
     transformations = get_transformations(
         keyword_extractor=True,
@@ -100,7 +110,7 @@ def create_keyword_table_index(
     )
 
     os.makedirs(save_path, exist_ok=True)
-    with open(f'{save_path}/{KG_INDEX_LABEL}', 'wb') as f:
+    with open(f'{save_path}/{KG_INDEX_LABEL}.pkl', 'wb') as f:
         pickle.dump(vector_index, f)
 
     return indexed_nodes, vector_index
@@ -147,12 +157,14 @@ def create_knowledge_graph_index(
 
 def get_graph_store(
         db_name,
+        host_ip='localhost',
         embed_dim=512,
         hybrid_search=True,
     ):
     create_neo4j_database(db_name)
+    url = get_url(host_ip)
     graph_store = Neo4jGraphStore(
-        url=neo4j_url,
+        url=url,
         username=neo4j_username,
         password=neo4j_password,
         database=neo4j_database,

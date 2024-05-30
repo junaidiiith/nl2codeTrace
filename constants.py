@@ -59,7 +59,11 @@ class LLMTypes(Enum):
 
 KG_INDEX_LABEL = 'kg_index'
 KG_INDEX_CUSTOM_LABEL = 'kg_index_custom'
-VECTOR_INDEX_LABEL = 'vector_index.pkl'
-KW_TABLE_LABEL = 'kw_table.pkl'
+VECTOR_INDEX_LABEL = 'vector_index'
+KW_TABLE_LABEL = 'kw_table'
 CODE_KG_INDEX_LABEL = 'code_kg_index.pkl'
 SIMPLE_KW_TABLE_LABEL = 'simple_kw_table.pkl'
+
+
+VECTOR_INDEX_RETREIVER = 'vir'
+BM25_INDEX_RETREIVER = 'bm25'

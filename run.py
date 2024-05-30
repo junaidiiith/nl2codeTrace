@@ -1,79 +1,73 @@
+import pickle
 from typing import List
-from llama_index.core.llama_dataset.generator import RagDatasetGenerator
 import json
 import os
-import pickle
 
+
+from llama_index.retrievers.bm25 import BM25Retriever
 from llama_index.core.schema import TextNode, MetadataMode
-from evaluation import evaluate_indices, evaluate_query_engines, generate_qa_dataset, get_questions_from_nodes
+from llama_index.core.indices import VectorStoreIndex
+from evaluation import (
+    evaluate_response,
+    evaluate_retrieval, 
+    get_questions_from_nodes
+)
 from req2nodes import get_requirements_nodes
-from retrievers import custom_query_engine
-from api_models import set_llm_and_embed
+from querying import custom_query_engine
+from api_models import get_api_keys, set_llm_and_embed
 from indexing.utils import get_parser
-from indexing.indices import create_keyword_table_index, create_knowledge_graph_index, get_graph_store
+from indexing.indices import (
+    create_keyword_table_index, 
+    create_knowledge_graph_index, 
+    get_graph_store
+)
+
+
+from querying import get_fusion_qe
 from code2graph import get_code_graph_nodes
-from indexing.code_index import create_code_graph_nodes_index
-from indexing.utils import get_vector_storage_context, get_kuzu_graph_store
+from indexing.code_index import add_method_call_links_to_docs, create_code_graph_nodes_index
+from indexing.utils import get_vector_storage_context
 from indexing.indices import create_vector_index
 from llama_index.core.schema import Document
-from prompts.templates import CODE_KEYWORD_EXTRACT_TEMPLATE
-from prompts.templates import CODE_KG_KEYWORD_EXTRACT_TEMPLATE
-from argparse import ArgumentParser
 from constants import (
-    EmbeddingModels,
-    LLMTypes, 
-    LLMs,
     LLMsMap,
     EmbeddingModelsMap,
-    KG_INDEX_LABEL,
-    KW_TABLE_LABEL,
-    KG_INDEX_CUSTOM_LABEL,
-    VECTOR_INDEX_LABEL
 )
-from llama_index.core.indices import KnowledgeGraphIndex, KeywordTableIndex
-
+from llama_index.core.indices import (
+    KnowledgeGraphIndex, 
+)
 
 from parameters import parse_args
 
 
-def set_models(llm_type, llm_name, embed_model):
-    llm_name = LLMsMap[llm_name]
-    embed_model_name = EmbeddingModelsMap[embed_model]
-    print(f"Using LLM: {llm_name}")
-    print(f"Using Embedding Model: {embed_model_name}")
-
-    set_llm_and_embed(
-        llm_type=llm_type,
-        llm_name=llm_name,
-        embed_model_name=embed_model_name,
-    )
-
 def get_vector_index(docs, indices_path, dataset_name):
     print(f"Creating Vector Index...")
     storage_context, _ = get_vector_storage_context(
-        chroma_db_path=f'{indices_path}',
+        chroma_db_path=f'{indices_path}/VI',
         collection_name=f'{dataset_name}',
     )
 
-    _, vector_index = create_vector_index(
+    indexed_nodes, vector_index = create_vector_index(
         nodes=docs, 
         storage_context=storage_context, 
         num_threads=8,
-        save_path=f'{indices_path}',
+        save_path=f"{indices_path}/{dataset_name}",
         show_progress=True
     )
     print(f"Vector Index created.")
-    return vector_index
+    return indexed_nodes, vector_index
 
 
 def get_kg_links_index(
         docs, 
         graph_nodes, 
         dataset_name,
+        host_ip='localhost',
         include_embeddings=False,
     ):
     graph_storage_context = get_graph_store(
         db_name=f'nl2code{dataset_name}',
+        host_ip=host_ip,
     )
     index = create_knowledge_graph_index(
         docs, 
@@ -87,33 +81,41 @@ def get_kg_links_index(
 def get_kw_table_index(
         docs, 
         indices_path, 
-        dataset_name
-    ) -> KeywordTableIndex:
+        dataset_name,
+        use_vector_store=False,
+    ) -> VectorStoreIndex:
     print(f"Creating Keyword Table Index...")
-    storage_context, _ = get_vector_storage_context(
-        chroma_db_path=f'{indices_path}',
+    storage_context, vector_store = get_vector_storage_context(
+        chroma_db_path=f'{indices_path}/KW',
         collection_name=f'{dataset_name}',
     )
-
-    _, kw_index = create_keyword_table_index(
-        docs=docs, 
-        storage_context=storage_context, 
-        num_keywords=20,
-        num_threads=8,
-        save_path=f'{indices_path}',
-        show_progress=True
-    )
+    if use_vector_store:
+        vector_index = VectorStoreIndex.from_vector_store(
+            vector_store=vector_store,
+        )
+    else:
+        _, vector_index = create_keyword_table_index(
+            docs=docs, 
+            storage_context=storage_context, 
+            num_keywords=20,
+            num_threads=8,
+            save_path=f'{indices_path}/{dataset_name}',
+            show_progress=True
+        )
+    
     print(f"Keyword Table Index created.")
-    return kw_index
+    return vector_index
 
 
 def get_kg_index(
         docs: List[TextNode],
-        dataset_name
+        dataset_name,
+        host_ip='localhost',
     ) -> KnowledgeGraphIndex:
 
     graph_storage_index = get_graph_store(
         db_name=f'nl2code{dataset_name}',
+        host_ip=host_ip,
     )
     
     docs = [Document(text=doc.get_content(MetadataMode.LLM)) for doc in docs]
@@ -125,7 +127,8 @@ def get_kg_index(
     return kg_index
 
 
-def execute_dataset(args, dataset_name):
+def get_code_nodes(args, dataset_name):
+    os.makedirs('results', exist_ok=True)
     args.dataset_name = dataset_name
 
     base_dir = args.base_dir
@@ -133,9 +136,6 @@ def execute_dataset(args, dataset_name):
     dataset_dir = f'{base_dir}/{dataset_name}'
     indices_path = f"{args.chroma_db_dir}/{dataset_name}"
     os.makedirs(indices_path, exist_ok=True)
-
-    solutions_file = args.solutions_file
-    solutions_file_path = f'{dataset_dir}/{dataset_name}_{solutions_file}'
 
     call_graph_file = f'{dataset_name.lower()}_{args.call_graph_file}'
 
@@ -148,97 +148,139 @@ def execute_dataset(args, dataset_name):
 
     print(f"Indexing code nodes...")
     code_nodes = create_code_graph_nodes_index(
-        graph_nodes=graph_nodes
+        graph_nodes=graph_nodes,
+        add_method_calls=args.add_method_calls
     )
     print(f"Number of code nodes: {len(code_nodes)}")
+    print(f"Adding method call links to docs...")
+    return code_nodes
+
+
+def execute_dataset(args, dataset_name):
+
+    os.makedirs('results', exist_ok=True)
+    args.dataset_name = dataset_name
+
+    base_dir = args.base_dir
+    dataset_name = args.dataset_name
+    dataset_dir = f'{base_dir}/{dataset_name}'
+    indices_path = f"{args.chroma_db_dir}/{dataset_name}"
+    os.makedirs(indices_path, exist_ok=True)
+    
+    solutions_file = args.solutions_file
+    solutions_file_path = f'{dataset_dir}/{dataset_name.lower()}_{solutions_file}'
+
+    code_nodes = get_code_nodes(args, dataset_name)
+    # add_method_call_links_to_docs(code_nodes, rel_type='parent')
+
     parser = get_parser()
     print(f"Getting nodes from documents...")
     docs = parser.get_nodes_from_documents(code_nodes)
     print(f"Number of nodes: {len(docs)}")
+    indexed_nodes, vector_index = get_vector_index(docs, indices_path, dataset_name)
 
-    
-    vector_index = get_vector_index(docs, indices_path, dataset_name)
-    print(f"Creating KG Links Index...")
-    kg_links_index = get_kg_links_index(
-        docs, 
-        graph_nodes,
-        dataset_name,
-        include_embeddings=args.include_embeddings
-    )
-    print(f"KG Links Index created.")
+    with open(f'indices/{dataset_name}{"_mc" if args.add_method_calls else ""}.pkl', 'wb') as f:
+        pickle.dump(indexed_nodes, f)
+
+    # fusion_qe = get_fusion_qe(
+    #     retrievers=[bm25_retriever],
+    #     similarity_top_k=args.similarity_top_k,
+    #     num_queries=args.num_queries,
+    # )
+
+    # print(f"Creating KG Links Index...")
+    # kg_links_index = get_kg_links_index(
+    #     docs, 
+    #     graph_nodes,
+    #     dataset_name,
+    #     args.host_ip,
+    #     include_embeddings=args.include_embeddings
+    # )
+    # print(f"KG Links Index created.")
 
     print(f"Creating KG Index...")
-    kg_index = get_kg_index(docs, dataset_name)
-    kw_index = get_kw_table_index(docs, indices_path, dataset_name)
+    # kg_index = get_kg_index(docs, dataset_name, args.host_ip)
+    # kw_index = get_kw_table_index(docs, indices_path, dataset_name)
     print(f"Indices created.")
 
-    query_engines = {
-        'vector_index': vector_index.as_query_engine(),
-        'kg_links_index': kg_links_index.as_query_engine(),
-        'kg_index': kg_index.as_query_engine(),
-        'kw_index': kw_index.as_query_engine(),
-        'vector_kg_links': custom_query_engine(
-            vector_index.as_retriever(),
-            kg_links_index.as_retriever(),
-        ),
-        'vector_kw_table': custom_query_engine(
-            vector_index.as_retriever(),
-            kw_index.as_retriever(),
-        ),
-        'vector_kg': custom_query_engine(
-            vector_index.as_retriever(),
-            kg_index.as_retriever(),
-        ),
-    }
+    # query_engines = {
+    #     'vector_index': vector_index.as_query_engine(response_mode='refine', similarity_top_k=10),
+        # 'fusion_qe_index': fusion_qe,
+        # 'kg_links_index': kg_links_index.as_query_engine(),
+        # 'kg_index': kg_index.as_query_engine(),
+        # 'kw_index': kw_index.as_query_engine(),
+        # 'vector_kg_links': custom_query_engine(
+        #     vector_index.as_retriever(),
+            # kg_links_index.as_retriever(),
+        # ),
+        # 'vector_kw_table': custom_query_engine(
+        #     vector_index.as_retriever(),
+        #     kw_index.as_retriever(),
+        # ),
+        # 'vector_kg': custom_query_engine(
+        #     vector_index.as_retriever(),
+        #     kg_index.as_retriever(),
+        # ),
+    # }
 
-    req_nodes = get_requirements_nodes(
-        dataset_dir,
-        all_req_files_path=args.all_req_filenames,
-    )
 
-    correctness_results = evaluate_query_engines(
-        req_nodes=req_nodes,
-        query_engines=query_engines,
-        solutions_file=solutions_file_path,
-    )
+    # req_nodes = get_requirements_nodes(
+    #     dataset_dir,
+    #     all_req_files_path=args.all_req_filenames,
+    # )
 
-    indices = {
-        'vector_index': vector_index,
-        'kg_links_index': kg_links_index,
-        'kg_index': kg_index,
-        'kw_index': kw_index,
-    }
-
-    questions = get_questions_from_nodes(code_nodes)
-    print(f"Number of questions: {len(questions)}")
-    eval_results = evaluate_indices(questions, indices)
+    # correctness_results = evaluate_response(
+    #     req_nodes=req_nodes,
+    #     query_engines=query_engines,
+    #     solutions_file=solutions_file_path,
+    #     dataset_name=dataset_name
+    # )
     
-    results = {
-        'correctness': correctness_results,
-        'evaluation': eval_results,
-    }
-    with open(f'results/results.json', 'w') as f:
-        json.dump(results, f, indent=4)
+    # questions = get_questions_from_nodes(code_nodes)
+    # print(f"Number of questions: {len(questions)}")
+    # eval_results = evaluate_retrieval(
+    #     questions, query_engines, dataset_name
+    # )
+
+    # results = {
+    #     'correctness': correctness_results,
+    #     # 'evaluation': eval_results,
+    # }
+    # with open(f'results/{dataset_name}_results.json', 'w') as f:
+    #     json.dump(results, f, indent=4)
 
 
 def main():
     configs = [
-        ('eTour', 'bge_small'),
-        ('iTrust', 'bge_small'),
-        ('smos', 'bge_small'),
+        ('iTrust', 'bge_large'),
+        ('smos', 'bge_m3'),
         ('eANCI', 'bge_m3'),
-
+        ('eTour', 'bge_large')
     ]
     args = parse_args()
-    for dataset_name, embed_model in configs:
-        set_models(
+    dataset_name = 'iTrust'
+    embed_model = 'bge_large'
+    api_key = get_api_keys(llm_type=args.llm_type)
+
+
+    for i, (dataset_name, embed_model) in enumerate(configs):
+        api_key = get_api_keys(llm_type=args.llm_type, idx=i)
+        
+        llm_name = LLMsMap[args.llm]
+        embed_model_name = EmbeddingModelsMap[embed_model]
+        print(f"Using LLM: {llm_name}")
+        print(f"Using Embedding Model: {embed_model_name}")
+
+        set_llm_and_embed(
             llm_type=args.llm_type,
-            llm_name=args.llm,
-            embed_model=embed_model,
+            llm_name=llm_name,
+            embed_model_name=embed_model_name,
+            api_key=api_key
         )
 
         execute_dataset(args, dataset_name)
-        break
+        
+        
 
 
 if __name__ == '__main__':

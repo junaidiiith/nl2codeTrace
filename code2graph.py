@@ -1,28 +1,66 @@
 import json
 import os
 import javalang
-
+import ast
+import networkx as nx
 import javalang.tree
 from tqdm.auto import tqdm
 
-FILE_NAME_LABEL = "File Name"
-CLASS_NAME_LABEL = "Class Name"
-DOCSTRING_LABEL = "Docstring"
-ATTRIBUTES_LABEL = "Attributes"
-ATTRIBUTE_NAME_LABEL = "Attribute Name"
-ATTRIBUTES_TYPE_LABEL = "Attribute Type"
-METHODS_LABEL = "Methods"
-METHOD_NAME_LABEL = "Method Name"
-METHOD_SIGNATURE_LABEL = "Signature"
-METHOD_DOCSTRING = "Method Docstring"
-METHOD_PARAMETERS_LABEL = "Method Parameters"
-METHOD_RETURN_LABEL = "Method Return"
-PARAMETERS = "Parameters"
-PARAM_NAME_LABEL = "Parameter Name"
-PARAM_TYPE_LABEL = "Parameter Type"
-PARAM_DESCRIPTION_LABEL = "Description"
-CALLS_LABEL = "calls"
-CALLED_BY_LABEL = "called_by"
+from indexing.code_index import create_class_node_doc
+from indexing.constants import (
+    FILE_NAME_LABEL,
+    CLASS_NAME_LABEL,
+    DOCSTRING_LABEL,
+    ATTRIBUTES_LABEL,
+    ATTRIBUTE_NAME_LABEL,
+    ATTRIBUTES_TYPE_LABEL,
+    METHOD_NAME_LABEL,
+    METHOD_SIGNATURE_LABEL,
+    METHOD_DOCSTRING,
+    CALLS_LABEL,
+    CALLED_BY_LABEL,
+    METHODS_LABEL,
+    PARAMETERS,
+    SRC_METHOD_LABEL,
+    CODE_METHOD_CALLS,
+    METHOD_PARAMETERS_LABEL,
+    METHOD_RETURN_LABEL,
+    PARAM_NAME_LABEL,
+    PARAM_TYPE_LABEL,
+)
+
+
+def create_networkx_from_class_docs(docs):
+
+    def add_edge(g: nx.DiGraph, cls_method, call):
+        signature_contents = get_signature_contents(call)
+        call_cls = signature_contents[CLASS_NAME_LABEL]
+        method_name = signature_contents[METHOD_NAME_LABEL]
+        parameters = signature_contents[PARAMETERS]
+        if not g.has_edge(class_name, call_cls):
+            g.add_edge(class_name, call_cls, relations=[])
+        
+        g[class_name][call_cls]['relations'].append({
+            SRC_METHOD_LABEL: cls_method,
+            METHOD_NAME_LABEL: method_name,
+            PARAMETERS: parameters,
+        })
+        
+    G = nx.DiGraph()
+    for doc in docs:
+        G.add_node(doc.metadata[CLASS_NAME_LABEL], file_name=doc.metadata[FILE_NAME_LABEL])
+    for doc in tqdm(docs, desc="Creating Networkx Graph"):
+        class_name = doc.metadata[CLASS_NAME_LABEL]
+        method_calls = ast.literal_eval(doc.metadata[CODE_METHOD_CALLS])
+        for method_name, links in method_calls.items():
+            calls, called_by = links[CALLS_LABEL], links[CALLED_BY_LABEL]
+
+            for link in calls + called_by:
+                add_edge(G, method_name, link)
+
+    return G
+
+
 
 
 def parse_java_file(file_path):
@@ -159,6 +197,7 @@ def get_class_info_objects(
 def add_method_calls(graph_nodes, cdg_file_path):
     cdg = json.load(open(cdg_file_path))
     present, absent = 0, 0
+    total = 0
     for node in list(graph_nodes.values()):
         if node["type"] == "Method":
             method_key = node[METHOD_SIGNATURE_LABEL]
@@ -166,7 +205,9 @@ def add_method_calls(graph_nodes, cdg_file_path):
                 graph_nodes[method_key][CALLS_LABEL] = cdg[method_key]["calls"]
                 graph_nodes[method_key][CALLED_BY_LABEL] = cdg[method_key]["called_by"]
 
-                for node_call in cdg[method_key]["calls"] + cdg[method_key]["called_by"]:
+                links = cdg[method_key]["calls"] + cdg[method_key]["called_by"]
+                total += len(links)
+                for node_call in links:
                     if node_call not in cdg:
                         absent += 1
                         print(f"Node {node_call} not found")
@@ -185,6 +226,7 @@ def add_method_calls(graph_nodes, cdg_file_path):
                         graph_nodes[node_call][CALLED_BY_LABEL] = cdg_call_node["called_by"]
                         graph_nodes[node_call][CALLS_LABEL] = cdg_call_node["calls"]
 
+    print(f"Total: {total}")
     print(f"Present: {present}, Absent: {absent}")
     print("Number of nodes in the graph:", len(graph_nodes))
 
@@ -264,6 +306,25 @@ def get_code_graph_nodes(
     return graph_nodes
 
 
+
+def get_graph_node_str(graph_node):
+    content = f"Class {graph_node[CLASS_NAME_LABEL]}\n"
+    if graph_node[DOCSTRING_LABEL]:
+        content += f"Docstring: {graph_node[DOCSTRING_LABEL]}\n"
+        
+    if ATTRIBUTES_LABEL in graph_node and len(graph_node[ATTRIBUTES_LABEL]):
+        content += f"Attributes: \n"
+        for attr in graph_node[ATTRIBUTES_LABEL]:
+            content += f"{attr[ATTRIBUTE_NAME_LABEL]}: {attr[ATTRIBUTES_TYPE_LABEL]}\n"
+    
+    method_names = [i[METHOD_NAME_LABEL] for i in graph_node[METHODS_LABEL]] 
+    if len(method_names):
+        content += f"Methods: {', '.join(method_names)}"
+    return content
+
+
+
+
 def get_code_nodes(
         base_dir: str,
         all_code_files_path: str,
@@ -279,12 +340,37 @@ def get_code_nodes(
     return nodes
 
 
+def get_docs_nxg(
+        dataset_dir, 
+        all_code_files_path, 
+        callgraph_file_name
+    ):
+    graph_nodes = get_code_graph_nodes(
+        base_dir=dataset_dir,
+        all_code_files_path=all_code_files_path,
+        callgraph_file_name=callgraph_file_name,
+    )
+    graph_nodes = [
+        graph_node
+        for graph_node in tqdm(graph_nodes.values(), desc="Creating Documents")
+        if graph_node["type"] == "Class"
+    ]
+
+    docs = [
+        create_class_node_doc(graph_node) \
+        for graph_node in tqdm(graph_nodes)
+    ]
+
+    docs_graph = create_networkx_from_class_docs(docs)
+    return docs_graph, {gn[CLASS_NAME_LABEL]: gn for gn in graph_nodes}
+
+
 if __name__ == '__main__':
     for dataset in ['iTrust', 'eTour', 'eANCI', 'smos']:
         print(f"Processing {dataset}")
         graph_nodes = get_code_graph_nodes(
             base_dir=f'data_repos/ftlr/datasets/{dataset}',
             all_code_files_path='all_code_filenames.txt',
-            callgraph_path=f'{dataset.lower()}_method_callgraph.json',
+            callgraph_file_name=f'{dataset.lower()}_method_callgraph.json',
         )
         print(f"Finished processing {dataset}")

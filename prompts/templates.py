@@ -17,7 +17,7 @@ The summary should be concise not more than 2-3 lines which contains Java Code K
 
 CLASS_TRACE_TEMPLATE = \
 """
-What are the names of the classes that are related to the following use case?
+What are the names of the classes that are related to the following use case requirement?
 {requirement}
 
 Provide the answer in a list format and provide ONLY the list of class names as a JSON list.
@@ -88,6 +88,48 @@ CODE_EXAMPLE = \
     ""
 """
 
+
+METHOD_CALL_EXTRACTION_TEMPLATE = \
+"Also, provide the purpose of each method call where a method 'calls' or 'called by' another method" \
++ "Provide the summary in the following format:"\
++ "<Method Call Summary>\n"\
++ "<Method Call Summary>\n"\
++ "...\n\n"\
++ "<Method Called By Summary>\n"\
++ "<Method Called By Summary>\n"\
++ "...\n\n"\
+
+
+CODE_SUMMARY_EXTRACT_TEMPLATE = \
+"You are an expert in summarizing Code to the relevant Use case scenario where it can be used." \
++ "Given a class in a Java code file, generate a class summary to map a given use case requirements to the given java code." \
++ "The summary should capture the purpose of the class and its attributes and methods"\
++ "Given a doc with the following structure that will be useful for traceability where we map use case case requirements with code elements:\n"\
++ f"{DOC_STRUCTURE_TEMPLATE}"\
++ f"{CODE_EXAMPLE}"\
++ "Provide the summary in simple abstract use case scenario language in the following format: "\
++ "Class Name: <Class Summary>\n"\
++ "Method Name: <Method Summary>\n"\
++ "Method Name: <Method Summary>\n"\
++ "...\n"\
++ " Given the following code, provide the purpose of the class and each of the present methods. "\
++ "{method_calls_str}"\
+
+
+def code_summarization_template(use_method_calls=False):
+    if use_method_calls:
+        template = CODE_SUMMARY_EXTRACT_TEMPLATE.format(
+            method_calls_str=METHOD_CALL_EXTRACTION_TEMPLATE
+        )
+    else:
+        template = CODE_SUMMARY_EXTRACT_TEMPLATE.format(method_calls_str="")
+    
+    template += " Here is the given code:\n {context_str}\n\n"\
+    
+    return template
+
+
+
 CODE_KG_KEYWORD_EXTRACT_TEMPLATE_TMPL = (
     f"Given a doc with the following structure:\n{DOC_STRUCTURE_TEMPLATE}"
     "---------------------\n"
@@ -154,5 +196,20 @@ REQ2CODE_QA_TEMPLATE = \
 + "{context_str}\n"\
 + " Given the contextual information,"\
 + " your task is to generate {num_questions_per_chunk} questions this context can provide"\
-+ " specific answers related to requirements to Java Class traceability"\
-+ " to which are unlikely to be found elsewhere. The questions should be diverse in nature across the document. Restrict the questions to the context information provided."
++ " specific answers related to requirements to Java Class traceability."\
++ " to which are unlikely to be found elsewhere. The questions should be diverse in nature across the document."\
++ " Restrict the questions to the context information provided."\
++ " Provide the questions in a list format where each question is a string in the list."
+
+
+
+
+SCENARIO_GEN_TEMPLATE = (
+    "You are an expert in mapping Code to Use case scenario and you generate multiple similar scenario some"
+    " generic abstract scenarios related to the functionality in the scenario and half concrete based on a "
+    "single input query."
+    "Generate {num_queries} requirements, one on each line, "
+    "related to the following input query:\n"
+    "Query: {query}\n"
+    "Queries:\n"
+)

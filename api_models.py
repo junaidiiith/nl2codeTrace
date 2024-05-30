@@ -1,5 +1,4 @@
 import json
-from typing import Union
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.anyscale import Anyscale
 from llama_index.llms.cohere import Cohere
@@ -18,13 +17,14 @@ from constants import (
 def get_api_keys(
     api_keys_file: str = 'api_keys.json',
     llm_type: str = LLMTypes.ANY_SCALE.value,
+    idx = 0
 ):
     all_api_keys = json.load(open(api_keys_file))
-    api_key = all_api_keys[llm_type][0]
+    api_key = all_api_keys[llm_type][idx]
     return api_key
 
 
-def get_embed_model(
+def set_embed_model(
     model_name: str = EmbeddingModelsMap[EmbeddingModels.DEFAULT_EMBED_MODEL.value],
 ):
 
@@ -32,14 +32,15 @@ def get_embed_model(
         model_name=model_name,
         max_length=1024,
     )
-    return embed_llm
+    Settings.embed_model = embed_llm
 
 
-def get_llm(
-    model_type: str = LLMTypes.ANY_SCALE.value,
-    model_name: str = LLMsMap[LLMs.LLAMA3.value],
+def set_llm(
+    model_type: str = None,
+    model_name: str = None,
+    api_key = None
 ):
-    api_key = get_api_keys(llm_type=model_type)
+    api_key = get_api_keys(llm_type=model_type) if api_key is None else api_key
     if model_type == LLMTypes.ANY_SCALE.value:
         llm = Anyscale(
             model=model_name,
@@ -56,16 +57,15 @@ def get_llm(
             api_key=api_key
         )
 
-    return llm
+    Settings.llm = llm
 
 
 def set_llm_and_embed(
     llm_type: str = None,
     llm_name: str = None,
     embed_model_name: str = None,
+    api_key = None
 ):
     
-    llm = get_llm(llm_type, llm_name) if llm_type and llm_name else get_llm()
-    embed_llm = get_embed_model(embed_model_name) if embed_model_name else get_embed_model()
-    Settings.llm = llm
-    Settings.embed_model = embed_llm
+    set_llm(llm_type, llm_name, api_key) if llm_type and llm_name else set_llm()
+    set_embed_model(embed_model_name) if embed_model_name else set_embed_model()

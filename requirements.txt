@@ -17,3 +17,5 @@ llama-index-llms-anyscale
 openai
 kuzu
 llama-index-graph-stores-kuzu
+llama-index-llms-cohere
+

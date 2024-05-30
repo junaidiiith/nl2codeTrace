@@ -1,8 +1,12 @@
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
+import pickle
 from llama_index.core import Document
 from collections import defaultdict
 import json
-from typing import List, Union
-from querying import query_parallel, CLASS_TRACE_TEMPLATE
+from querying import query_parallel
+from retrievers import retrieve_parallel
+from prompts.templates import CLASS_TRACE_TEMPLATE
 
 from tqdm.auto import tqdm
 import json
@@ -15,19 +19,15 @@ from llama_index.core.bridge.pydantic import BaseModel
 from llama_index.core.llama_dataset.generator import RagDatasetGenerator
 from llama_index.core.evaluation import (
     BatchEvalRunner,
-    ContextRelevancyEvaluator,
     FaithfulnessEvaluator,
     RelevancyEvaluator
 )
-from llama_index.core.indices import (
-    VectorStoreIndex,
-    KeywordTableIndex,
-    KnowledgeGraphIndex
-)
+
+
 from indexing.utils import run_pipeline_multithreaded, get_transformations
 from prompts.templates import REQ2CODE_QA_TEMPLATE
 
-
+QUESTIONS_CHUNKS_SIZE = 50
 
 class QADataset(BaseModel):
     """Embedding QA Finetuning Dataset.
@@ -109,10 +109,10 @@ def generate_qa_dataset(
 
 
 
-def get_post_processing_results(req_results):
+def get_post_processing_results(req_results: Dict):
     ok = True
     llm_results = defaultdict(set)
-    for file_name, result in req_results:
+    for file_name, result in req_results.items():
         try:
             class_names_list = json.loads(result.response)
             for class_name in class_names_list:
@@ -138,12 +138,16 @@ def get_solutions(file_name):
     for gt in gts:
         gt_split = gt.split(': ')
         file_name = gt_split[0]
-        class_name = gt_split[1].split('.java')[0]
+        ext = '.java' if gt_split[1].endswith('.java') else '.txt'
+        class_name = gt_split[1].split(ext)[0]
         solutions[file_name].append(class_name)
     return solutions
 
 
-def compare_solutions(solutions, llm_results, result_file_name='results.json'):
+def compare_solutions(
+        solutions, 
+        llm_results, 
+    ):
     results = list()
     tp, fp = 0, 0
     tn, fn = 0, 0
@@ -160,8 +164,6 @@ def compare_solutions(solutions, llm_results, result_file_name='results.json'):
                 "llm_classes": sorted(llm_results[file_name])
             }
             results.append(result)
-    with open(f"results/{result_file_name}", 'w') as f:
-        json.dump(results, f, indent=4)
     
     precision = tp / (tp + fp) if tp + fp > 0 else 0
     recall = tp / (tp + fn) if tp + fn > 0 else 0
@@ -169,33 +171,46 @@ def compare_solutions(solutions, llm_results, result_file_name='results.json'):
     print("Precision: ", precision)
     print("Recall: ", recall)
     print("F1 Score: ", f1)
+    scores = {
+        "precision": precision,
+        "recall": recall,
+        "f1": f1
+    }
+    
+    return results, scores
 
 
-def get_results(
-        query_engines, 
-        query_template: str,
-        req_nodes,
-        base_dir: str = 'etour_solution_links_english.txt',
+def evaluate_from_retriever(
+        req_nodes: List[Document],
+        retrievers: Dict,
+        solutions_file: str,
+        dataset_name: str = 'tmp',
+        results_dir: str = 'results',
     ):
-    for config, query_engine in query_engines.items():
+    results = dict()
+    solutions = get_solutions(solutions_file)
+    for config, retriever in retrievers.items():
         print(f"Evaluating for {config}")
-        req_results = query_parallel(
-            query_engine, 
-            query_template, 
+        req_results = retrieve_parallel(
+            retriever, 
             req_nodes, 
-            num_threads=8
+            CLASS_TRACE_TEMPLATE,
+            num_threads=8,
         )
-        llm_results = get_post_processing_results(req_results)
         print(f"Results for {config}")
+        config_results = compare_solutions(solutions, req_results)
+        results[config] = config_results
 
-        solutions = get_solutions(f'{base_dir}/etour_solution_links_english.txt')
-        compare_solutions(solutions, llm_results)
+        with open(f'{results_dir}/{dataset_name}_{config}_retriever_correctness_results.json', 'w') as f:
+            json.dump(config_results, f, indent=4)
 
 
-def evaluate_query_engines(
+def evaluate_response(
         req_nodes: List[Document], 
         query_engines: dict,
-        solutions_file: str
+        solutions_file: str,
+        dataset_name: str = 'tmp',
+        results_dir: str = 'results',
     ):
     results = dict()
     solutions = get_solutions(solutions_file)
@@ -205,14 +220,14 @@ def evaluate_query_engines(
             query_engine, 
             CLASS_TRACE_TEMPLATE, 
             req_nodes, 
-            num_threads=8
+            num_threads=8,
         )
         llm_results = get_post_processing_results(req_results)
         print(f"Results for {config}")
         config_results = compare_solutions(solutions, llm_results)
         results[config] = config_results
 
-        with open(f'results/{config}_correctness_results.json', 'w') as f:
+        with open(f'{results_dir}/{dataset_name}_{config}_correctness_results.json', 'w') as f:
             json.dump(config_results, f, indent=4)
 
     return results
@@ -233,48 +248,75 @@ def get_questions_from_nodes(nodes):
 
 
 def evaluate_index(
-        questions: List, 
-        index: Union[VectorStoreIndex, KeywordTableIndex, KeywordTableIndex],
-        num_workers: int = 8
-    ):
-    
+        questions: List[str],
+        query_engine,
+        num_workers: int = 4,
+):
     runner = BatchEvalRunner(
         {
-            "faithfulness": FaithfulnessEvaluator(), 
+            "faithfulness": FaithfulnessEvaluator(),
             "relevancy": RelevancyEvaluator(),
-            # "context_relevancy": ContextRelevancyEvaluator(),
         },
         workers=num_workers,
     )
 
     eval_results = runner.evaluate_queries(
-        index.as_query_engine(), queries=questions
+        query_engine, queries=questions
     )
-    extract_result = lambda results, key: sum(result.passing for result in results[key]) / len(results[key])
-    faithfulness = extract_result(eval_results, "faithfulness")
-    relevancy = extract_result(eval_results, "relevancy")
-    # context_relevancy = extract_result(eval_results, "context_relevancy")
-    result = {
-        "faithfulness": faithfulness,
-        "relevancy": relevancy,
-        # "context_relevancy": context_relevancy,
-    }
-
-    return result
+    return eval_results
 
 
-def evaluate_indices(
-        questions: List[str], 
-        indices: Dict[str, Union[VectorStoreIndex, KeywordTableIndex, KnowledgeGraphIndex]],
-        num_workers: int = 8
+def evaluate_questions_on_index(
+        questions: List, 
+        qe,
+        num_workers: int = 4,
+        num_threads: int = 4,
     ):
-    results = dict()
-    for index_name, index in indices.items():
-        print(f"Evaluating {index_name}")
-        eval_results = evaluate_index(questions, index, num_workers)
-        results[index_name] = eval_results
+    question_chunks = [
+        questions[i:i + QUESTIONS_CHUNKS_SIZE] \
+            for i in range(0, len(questions), QUESTIONS_CHUNKS_SIZE)
+    ]
 
-        with open(f'results/{index_name}_evaluation_results.json', 'w') as f:
-            json.dump(eval_results, f, indent=4)
+    results = list()
+    total_jobs = len(question_chunks)
+    
+    with tqdm(total=total_jobs, desc=f"Evaluating Question Chunks of {QUESTIONS_CHUNKS_SIZE}") as pbar:
+        with ThreadPoolExecutor(max_workers=num_threads) as executor:
+            futures = [executor.submit(evaluate_index, chunk, qe, num_workers) for chunk in question_chunks]
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                results.append(result)
+                pbar.update(1)
+    
+    eval_results = dict()
+    eval_results['faithfulness'] = [r for result in results for r in result['faithfulness']]
+    eval_results['relevancy'] = [r for result in results for r in result['relevancy']]
+
+    return eval_results
+
+
+def evaluate_retrieval(
+        questions: List[str], 
+        query_engines,
+        dataset_name: str = 'tmp',
+        num_workers: int = 8,
+    ):
+    extract_result = lambda results, key: sum(result.passing for result in results[key]) / len(results[key])
+    results = dict()
+    for index_name, qe in query_engines.items():
+        print(f"Evaluating {index_name}")
+        eval_results = evaluate_questions_on_index(questions, qe, num_workers)
+        faithfulness = extract_result(eval_results, "faithfulness")
+        relevancy = extract_result(eval_results, "relevancy")
+        results[index_name] = {
+            "faithfulness": faithfulness,
+            "relevancy": relevancy,
+        }
+
+        with open(f'results/{dataset_name}_{index_name}_evaluation_results.pkl', 'wb') as f:
+            pickle.dump(eval_results, f)
+
+        with open(f'results/{dataset_name}_{index_name}_evaluation_results.json', 'w') as f:
+            json.dump(results, f, indent=4)
 
     return results
