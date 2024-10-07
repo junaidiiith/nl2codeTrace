@@ -3,7 +3,6 @@ from api_models import get_api_keys, set_llm_and_embed
 from constants import EmbeddingModelsMap, LLMsMap
 from parameters import parse_args
 from req2nodes import get_requirements_nodes
-from run import get_code_nodes
 from indexing.utils import create_semantically_similar_nodes
 
 

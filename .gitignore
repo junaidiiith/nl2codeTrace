@@ -161,7 +161,6 @@ cython_debug/
 
 
 cds*
-data_repos*
 .vscode
 
 indices/*
